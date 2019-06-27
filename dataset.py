@@ -1,9 +1,8 @@
 from itertools import permutations
+from copy import deepcopy
 
 import numpy as np
-
 import tensorflow as tf
-import tensorflow.keras as keras
 
 from cyanide import *
 
@@ -59,6 +58,9 @@ class DataLoader:
         self.V = V
 
     def key2data(self, key):
+        if not isinstance(key, str):
+            key = key.numpy().decode("utf-8")
+
         n = 20
         m = 32
         beta = 0.1
@@ -155,6 +157,54 @@ class DataLoader:
         key = cif2key(cif)
         return self.key2data(key)
 
+    def make_dataset(self, keys, ys=None, batch_size=32, buffer_size=256):
+        output_types = [
+            tf.int32,
+            tf.int32,
+            tf.int32,
+            tf.float32,
+        ]
+
+        padded_shapes = (
+            [-1],
+            [-1, -1],
+            [-1, -1],
+            [-1, -1],
+        )
+
+        padding_values = (-1, -1, -1, 0.0)
+
+        def key2data(key):
+            return tf.py_function(self.key2data, inp=[key], Tout=output_types)
+
+        seed = np.random.randint(np.iinfo(np.int32).max)
+
+        xs = tf.data.Dataset.from_generator(
+                 lambda: (key for key in keys),
+                 output_types=tf.string,
+             )
+        xs = xs.repeat()
+        xs = xs.shuffle(buffer_size, seed=seed)
+        xs = xs.map(key2data)
+        xs = xs.cache()
+        xs = xs.padded_batch(batch_size, padded_shapes, padding_values)
+
+        if ys is not None:
+            ydata = ys
+            ys = tf.data.Dataset.from_generator(
+                     lambda: ([y] for y in ydata),
+                     output_types=tf.float32,
+                 )
+            ys = ys.repeat()
+            ys = ys.shuffle(buffer_size, seed=seed)
+            ys = ys.batch(batch_size)
+
+            dataset = tf.data.Dataset.zip((xs, ys))
+        else:
+            dataset = xs
+
+        return dataset
+
 
 def test():
     print("# TEST 1 #")
@@ -169,7 +219,8 @@ def test():
     }
     node_hash = np.load("MOF-50000-sa-node_hash.npy").item()
     edge_hash = np.load("MOF-50000-sa-edge_hash.npy").item()
-    print(edge_hash)
+    print("Node hash:", node_hash)
+    print("Edge hash:", edge_hash)
     V = np.load("MOF-50000-sa-V.npy")
     data_loader = DataLoader(topologies, node_hash, edge_hash, V)
 
@@ -178,6 +229,17 @@ def test():
     print(NN)
     print(E)
     print(ST)
+
+    print("# TEST 3 #")
+    #keys = [key[:-1] + str(i) for i in range(5)]
+    keys = [key] * 5000
+    ys = [float(v) for v in range(5000)]
+
+    dataset = data_loader.make_dataset(keys, ys, batch_size=128)
+    for i, xs in enumerate(dataset):
+        print(i)
+        if i > 1000:
+            break
 
 if __name__ == "__main__":
     test()
