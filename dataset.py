@@ -184,11 +184,11 @@ class DataLoader:
                  lambda: (key for key in keys),
                  output_types=tf.string,
              )
-        if shuffle:
-            xs = xs.shuffle(buffer_size, seed=seed)
         # To increase performance.
         xs = xs.map(key2data)
         xs = xs.cache()
+        if shuffle:
+            xs = xs.shuffle(buffer_size, seed=seed)
         if repeat:
             xs = xs.repeat()
         xs = xs.padded_batch(batch_size, padded_shapes, padding_values)
@@ -208,6 +208,8 @@ class DataLoader:
             dataset = tf.data.Dataset.zip((xs, ys))
         else:
             dataset = xs
+
+        # Maybe prefetch here?
 
         return dataset
 
@@ -237,13 +239,14 @@ def test():
     print(ST)
 
     print("# TEST 3 #")
-    #keys = [key[:-1] + str(i) for i in range(5)]
-    keys = [key] * 5000
-    ys = [float(v) for v in range(5000)]
+    keys = [key[:-1] + str(i) for i in range(5)]
+    #keys = [key] * 5000
+    ys = [float(v) for v in range(5)]
 
-    dataset = data_loader.make_dataset(keys, ys, batch_size=128)
-    for i, xs in enumerate(dataset):
-        print(i)
+    dataset = data_loader.make_dataset(keys, ys, batch_size=3)
+    for i, (xs, ys) in enumerate(dataset):
+        if i%100 == 0:
+            print(i, xs[2], ys)
         if i > 1000:
             break
 
