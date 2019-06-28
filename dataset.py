@@ -157,7 +157,8 @@ class DataLoader:
         key = cif2key(cif)
         return self.key2data(key)
 
-    def make_dataset(self, keys, ys=None, batch_size=32, buffer_size=256):
+    def make_dataset(self, keys, ys=None,
+            batch_size=32, buffer_size=256, repeat=True, shuffle=True):
         output_types = [
             tf.int32,
             tf.int32,
@@ -183,10 +184,13 @@ class DataLoader:
                  lambda: (key for key in keys),
                  output_types=tf.string,
              )
-        xs = xs.repeat()
-        xs = xs.shuffle(buffer_size, seed=seed)
+        if shuffle:
+            xs = xs.shuffle(buffer_size, seed=seed)
+        # To increase performance.
         xs = xs.map(key2data)
         xs = xs.cache()
+        if repeat:
+            xs = xs.repeat()
         xs = xs.padded_batch(batch_size, padded_shapes, padding_values)
 
         if ys is not None:
@@ -195,8 +199,10 @@ class DataLoader:
                      lambda: ([y] for y in ydata),
                      output_types=tf.float32,
                  )
-            ys = ys.repeat()
-            ys = ys.shuffle(buffer_size, seed=seed)
+            if shuffle:
+                ys = ys.shuffle(buffer_size, seed=seed)
+            if repeat:
+                ys = ys.repeat()
             ys = ys.batch(batch_size)
 
             dataset = tf.data.Dataset.zip((xs, ys))
