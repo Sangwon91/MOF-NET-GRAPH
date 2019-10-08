@@ -152,26 +152,40 @@ class GraphPooling(keras.layers.Layer):
         # mask size = (B, N, 1).
         mask = tf.expand_dims(mask, axis=-1)
 
+        # Manual average needed due to the mask.
         y = tf.reduce_sum(v*mask, axis=1) / tf.reduce_sum(mask, axis=1)
 
         return y
 
 
 class MofNet(keras.Model):
-    def __init__(self, node_dim, edge_dim):
+    def __init__(self, node_dim, edge_dim, n_convs=3, outdim=1):
         super().__init__()
+
+        self.node_dim = node_dim
+        self.edge_dim = edge_dim
 
         self.node_embedding = Embedding(1000, node_dim)
         self.edge_embedding = Embedding(1000, edge_dim)
 
-        n_convs = 3
         self.convs = [
             GraphConvolution(node_dim, edge_dim) for i in range(n_convs)
         ]
 
         self.pooling = GraphPooling()
 
-        self.dense = keras.layers.Dense(units=1)
+        self.dense = keras.layers.Dense(units=outdim)
+
+    def initialize_weights(self):
+        m = self.edge_dim
+
+        nt = np.zeros(shape=[1, 1], dtype=np.int32)
+        nl = np.zeros(shape=[1, 1, 1], dtype=np.int32)
+        et = np.zeros(shape=[1, 1, 1], dtype=np.int32)
+        st = np.zeros(shape=[1, 1, m], dtype=np.float32)
+
+        # Initialize weights by call "call".
+        self(nt, nl, et, st)
 
     def call(self, node_types, neighbor_list, edge_types, slot_types):
         n = self.node_embedding(node_types)
