@@ -20,7 +20,9 @@ class Embedding(keras.layers.Layer):
         self.w = self.add_weight(shape=[input_dim, output_dim],
                                  trainable=True, name="w")
 
-    def call(self, x):
+        self.dropout = keras.layers.Dropout(0.5)
+
+    def call(self, x, training=False):
         """
         Arguments:
             x: tensor of size (B, N).
@@ -32,8 +34,13 @@ class Embedding(keras.layers.Layer):
         # indices size = (B, N, 1).
         indices = tf.expand_dims(indices, axis=-1)
 
+        if training:
+            w = self.dropout(self.w)
+        else:
+            w = self.w + 0
+
         # y size = (B, N, E).
-        y = tf.gather_nd(self.w+0, indices)
+        y = tf.gather_nd(w, indices)
 
         # Make dummy embedding to zero vector.
         mask = tf.where(x < 0, tf.zeros_like(x), tf.ones_like(x))
@@ -95,8 +102,59 @@ class GraphConvolution(keras.layers.Layer):
                                   trainable=True, name="bs")
 
         self.neighbor_lookup = NeighborLookup()
+        self.batchnorm = keras.layers.BatchNormalization()
 
-    def call(self, v, nl, e):
+    def apply_batch_normalization(self, v, training=False):
+        B, N, X = v.shape
+
+        # v_flat size = (B*N, X).
+        v_flat = tf.reshape(v, shape=[-1, X])
+
+        # True for valid row index and False for row index of padded vectors.
+        idx = tf.reduce_all(tf.abs(v_flat) > 1e-5, axis=-1)
+
+        # Gather valid node vectors from the tensor.
+        v_valid = v_flat[idx]
+
+        # Apply batch normalization to the node vectors.
+        v_batch = self.batchnorm(v_valid, training=training)
+
+        # Return to original shape.
+
+        # Get the values of batch normalized v as 1D array.
+        v_batch_values = tf.reshape(v_batch, [-1])
+
+        # v_batch_indices shape = (B*N, X).
+        # All elements are the same for each row.
+        # E.g. v_batch_indices =
+        # [[T, T, T, ..., T],
+        #  [F, F, F, ..., F],
+        #  ...,
+        #  [T, T, T, ..., T]]
+        v_batch_indices = tf.broadcast_to(
+            tf.reshape(idx, shape=[-1, 1]),
+            v_flat.shape,
+        )
+
+        # Get the index of the True positions.
+        v_batch_indices = tf.where(v_batch_indices)
+
+        # Make spare tensor.
+        sparse_tensor = tf.sparse.SparseTensor(
+                            indices=v_batch_indices,
+                            values=v_batch_values,
+                            dense_shape=v_flat.shape
+                        )
+
+        # Return to dense tensor.
+        dense_tensor = tf.sparse.to_dense(sparse_tensor)
+
+        # Return to origianl shape, (B, N, X).
+        v_after_batchnorm = tf.reshape(dense_tensor, v.shape)
+
+        return v_after_batchnorm
+
+    def call(self, v, nl, e, training=False):
         """
         Arguments:
             v: input tensor (node vectors) of size (B, N, X).
@@ -128,6 +186,9 @@ class GraphConvolution(keras.layers.Layer):
         # because of the mask. If you want to average the summation, you should
         # devide the nodes sum by the sum of the mask.
         v_next = v + tf.reduce_sum(s, axis=2)
+
+        # Apply batch normalization after the activation.
+        v_next = self.apply_batch_normalization(v_next, training)
 
         return v_next
 
@@ -173,7 +234,6 @@ class MofNet(keras.Model):
         ]
 
         self.pooling = GraphPooling()
-
         self.dense = keras.layers.Dense(units=outdim)
 
     def initialize_weights(self):
@@ -184,19 +244,20 @@ class MofNet(keras.Model):
         et = np.zeros(shape=[1, 1, 1], dtype=np.int32)
         st = np.zeros(shape=[1, 1, m], dtype=np.float32)
 
-        # Initialize weights by call "call".
+        # Initialize weights by calling "__call__".
         self(nt, nl, et, st)
 
-    def call(self, node_types, neighbor_list, edge_types, slot_types):
-        n = self.node_embedding(node_types)
+    def call(self, node_types, neighbor_list, edge_types, slot_types,
+             training=False):
+        n = self.node_embedding(node_types, training)
         n = n + slot_types
-        e = self.edge_embedding(edge_types)
+        e = self.edge_embedding(edge_types, training)
 
         v = n
 
         nl = neighbor_list
         for conv in self.convs:
-            v = conv(v, nl, e)
+            v = conv(v, nl, e, training)
 
         v = self.pooling(v, node_types)
 
